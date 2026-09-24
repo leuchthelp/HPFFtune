@@ -11,3 +11,5 @@ wheels/
 
 # Manual
 site
+*.zarr
+*.DS_Store
