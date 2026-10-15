@@ -13,3 +13,5 @@ wheels/
 site
 *.zarr
 *.DS_Store
+*.nc
+*.h5
