@@ -1,11 +1,14 @@
-from inspect import getmembers, getmodule, isfunction
-from typing import Any
+from inspect import getmembers, getmodule, isclass
+from typing import Any, TypeGuard
 
+import numpy as np
+import optuna
 import pandas as pd
-from sklearn.base import BaseEstimator
-from sklearn.model_selection import train_test_split
+from narwhals import Object
+from sklearn.model_selection import cross_val_score, train_test_split
 
 from hpfftune.learn import regressors
+from hpfftune.learn.regressors import MetaData, NumberParams
 
 
 def wrapped_train_test_split(
@@ -16,34 +19,90 @@ def wrapped_train_test_split(
     return train_test_split(X, y, **train_test_params)
 
 
-def get_regressors(
-    module, common_params: dict[str, Any]
-) -> list[tuple[str, BaseEstimator]]:
-    regressor_names = getmembers(module, isfunction)
-    avail_regressors: list[tuple[str, BaseEstimator]] = []
+def ismetadata(object: Object) -> TypeGuard[MetaData]:
+    return isclass(object) and isinstance(object, MetaData)
 
-    for _, func in regressor_names:
-        if getmodule(func) == module:
-            regressor: tuple[str, BaseEstimator] = func(common_params)
-            avail_regressors.append(regressor)
+
+def get_regressors(module) -> dict[str, MetaData]:
+    metadata_classes = getmembers(module, ismetadata)
+    avail_regressors: dict[str, MetaData] = {}
+
+    for _, metadata in metadata_classes:
+        if getmodule(metadata) == module:
+            regressor_name = metadata.name
+            avail_regressors[regressor_name] = metadata
 
     return avail_regressors
 
 
-def setup(
-    dataset: pd.DataFrame,
-    target: str,
-    common_params: dict[str, Any],
-    train_test_params: dict[str, Any] | None = None,
-    skip_hyper_params_tuning: bool = False,
-    skip_dataset_cleanup: bool = False,
-):
-    X: pd.DataFrame = dataset.drop(columns=[target])
-    y: pd.Series = dataset[target]
+def select_params(
+    trial: optuna.Trial,
+    potential_params: dict[str, list[Any] | NumberParams],
+) -> dict[str, Any]:
+    selected_params: dict[str, Any] = {}
+    for param_name, params in potential_params.items():
+        if isinstance(params, list):
+            suggested_param: Any = trial.suggest_categorical(param_name, params)
+        elif isinstance(params, dict):
+            low = params["low"]
+            high = params["high"]
 
-    if train_test_params is None:
-        train_test_params = {}
+            step = None
+            if "step" in params:
+                step = params["step"]
 
-    X_train, X_test, y_train, y_test = wrapped_train_test_split(X, y, train_test_params)
+            ty = params["ty"]
 
-    avail_regressors = get_regressors(regressors, common_params)
+            if isinstance(ty, float):
+                suggested_param = trial.suggest_float(
+                    param_name, low, high, step=step, log=True
+                )
+            elif isinstance(ty, int):
+                low = int(low)
+                high = int(high)
+
+                if step is None:
+                    suggested_param = trial.suggest_int(param_name, low, high, log=True)
+                else:
+                    step = int(step)
+                    suggested_param = trial.suggest_int(
+                        param_name, low, high, step=step, log=True
+                    )
+
+        selected_params[param_name] = suggested_param
+
+    return selected_params
+
+
+def objective(trial: optuna.Trial) -> float:
+    if DATASET is None or TARGET is None:
+        raise ValueError("Dataset or Target are not provided.")
+
+    X: pd.DataFrame = DATASET.drop(columns=[TARGET])
+    y: pd.Series = DATASET[TARGET]
+
+    avail_regressors = get_regressors(regressors)
+
+    regressor_name = trial.suggest_categorical(
+        "regressor", list(avail_regressors.keys())
+    )
+
+    regressor_metadata = avail_regressors[regressor_name]
+    potential_params = regressor_metadata.param_map
+    selected_params = select_params(trial, potential_params)
+    regressor_init = regressor_metadata.regressor(selected_params)
+
+    score: np.ndarray = cross_val_score(regressor_init, X, y)
+    return score.mean()
+
+
+DATASET: pd.DataFrame | None = None
+TARGET: str | None = None
+
+
+def setup(dataset: pd.DataFrame, target: str):
+    DATASET = dataset  # noqa: F841
+    TARGET = target  # noqa: F841
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=100, show_progress_bar=True)

@@ -19,5 +19,4 @@ logger.setLevel(logging.INFO)
 
 
 def cli():
-
     pass
