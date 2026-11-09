@@ -1,13 +1,12 @@
 import pytest
-from sklearn.base import BaseEstimator
 
-from hpfftune.helpers import get_calling_func_name
+from hpfftune.helpers import MetaData, get_calling_func_name
 from hpfftune.learn import regressors
 from hpfftune.learn.regressors import (
     HistGradBoostRegMetaData,
     RandomForestRegressorMetaData,
 )
-from hpfftune.learn.setup import get_regressors
+from hpfftune.learn.setup import get_regressor_metadata
 
 
 def test_default():
@@ -33,10 +32,14 @@ def test_get_calling_func_name(input1, expectation):
         },
     ],
 )
-def test_get_regressors(expectation: dict[str, BaseEstimator]):
-    avail_regressors = get_regressors(regressors)
+def test_get_regressors(expectation: dict[str, MetaData]):
+    avail_regressors = get_regressor_metadata(regressors)
 
-    for name, metadata in avail_regressors:
+    assert avail_regressors
+
+    print(avail_regressors)
+
+    for name, metadata in avail_regressors.items():
         assert name in expectation
         known_regressor = expectation[name]
         assert type(metadata) == known_regressor

@@ -1,6 +1,33 @@
 import inspect
 import types
-from typing import cast
+from abc import abstractmethod
+from dataclasses import dataclass
+from typing import Any, NotRequired, TypedDict, cast
+
+from sklearn.base import BaseEstimator
+
+
+@dataclass
+class MetaData:
+    name: str
+
+    @property
+    @abstractmethod
+    def param_map(
+        self,
+    ) -> dict[str, list[Any] | NumberParams]:
+        pass
+
+    @abstractmethod
+    def regressor(self, params: dict[str, Any]) -> BaseEstimator:
+        pass
+
+
+class NumberParams(TypedDict):
+    low: float | int
+    high: float | int
+    step: NotRequired[float | int]
+    ty: type
 
 
 def get_calling_func_name() -> str:
