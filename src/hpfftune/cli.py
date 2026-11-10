@@ -10,7 +10,7 @@ from rich.traceback import install as install_rich_traceback
 from hpfftune.learn.setup import setup
 
 logging.basicConfig(
-    level=logging.CRITICAL,
+    level=logging.INFO,
     format="%(message)s",
     datefmt="[%X]",
     handlers=[RichHandler()],

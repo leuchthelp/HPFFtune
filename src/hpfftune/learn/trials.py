@@ -4,7 +4,11 @@ import numpy as np
 import optuna
 import pandas as pd
 from optuna.study import StudyDirection
-from sklearn.model_selection import BaseCrossValidator, RepeatedKFold, cross_validate
+from sklearn.model_selection import (
+    BaseCrossValidator,
+    KFold,
+    cross_validate,
+)
 
 from hpfftune.helpers import MetaData
 
@@ -23,7 +27,7 @@ class MetricTrial:
         self.regressors = regressors
 
         self.scoring = scoring
-        self.cv = RepeatedKFold(n_splits=5) if cv is None else cv
+        self.cv = KFold(n_splits=5, shuffle=True) if cv is None else cv
 
     def __call__(self, trial: optuna.Trial) -> float:
         regressor_name = trial.suggest_categorical(
@@ -101,7 +105,7 @@ class TimeTrial:
         self.regressors = regressors
 
         self.timing = timing
-        self.cv = RepeatedKFold(n_splits=5) if cv is None else cv
+        self.cv = KFold(n_splits=5, shuffle=True) if cv is None else cv
 
     def __call__(self, trial: optuna.Trial) -> float:
         regressor_name = trial.suggest_categorical(

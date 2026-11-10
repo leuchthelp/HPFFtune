@@ -98,7 +98,8 @@ def setup(
 
     avail_regressors = get_regressor_metadata(regressors)
 
-    pool = ProcessPool()
+    processes = 4
+    pool = ProcessPool(processes=processes)
 
     cpu_count = os.cpu_count()
 
@@ -116,7 +117,11 @@ def setup(
     for trial in metric_trial_args:
         studies.append(create_study_metric_trial(trial[0], trial[1], trial[2]))
 
-    n_jobs = None if cpu_count is None else cpu_count / len(metric_trial_args)
+    n_jobs = (
+        None
+        if cpu_count is None
+        else (cpu_count - processes - 1) / len(metric_trial_args)
+    )
     metric_trial_args = product(
         [n_jobs], avail_regressors.items(), scorings.items(), [(X, y)]
     )
@@ -140,7 +145,11 @@ def setup(
     for trial in time_trial_args:
         studies.append(create_study_time_trial(trial[0], trial[1], trial[2]))
 
-    n_jobs = None if cpu_count is None else cpu_count / len(time_trial_args)
+    n_jobs = (
+        None
+        if cpu_count is None
+        else (cpu_count - processes - 1) / len(metric_trial_args)
+    )
     time_trial_args = product(
         [n_jobs], avail_regressors.items(), timings.items(), [(X, y)]
     )
