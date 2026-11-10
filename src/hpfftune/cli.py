@@ -55,4 +55,25 @@ def cli(ds_path: Path | None = None, target: str | None = None):
     res = res.rename("node_num")
     tmp["node_num"] = res
 
-    setup(tmp, target)
+    categorical_columns_subset = [
+        "format",
+        "task_type",
+        "language",
+        "no_caching",
+        "parallel_backend",
+        "access_kind",
+        "unit_var",
+        "unit_chunk",
+    ]
+
+    numerical_columns_subset = [
+        "dimensions",
+        "num_nodes",
+        "num_ranks",
+        "parallel",
+        "total_filesize",
+        "filesize_per_var",
+        "filesize_per_chunk",
+    ]
+
+    setup(tmp, target, categorical_columns_subset, numerical_columns_subset)

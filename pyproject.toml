@@ -8,12 +8,15 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "cmaes>=0.13.1",
     "dask>=2026.8.0",
     "hpffbench",
     "matplot>=0.1.9",
     "netcdf4>=1.7.4",
     "optuna>=5.0.0",
     "optuna-dashboard>=0.21.0",
+    "optunahub>=0.5.0",
+    "pathos>=0.3.5",
     "rich>=15.0.0",
     "scikit-learn>=1.9.0",
     "seaborn>=0.13.2",

@@ -2,8 +2,10 @@ import inspect
 import types
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, cast
 
+import optuna
+import pandas as pd
 from sklearn.base import BaseEstimator
 
 
@@ -11,23 +13,17 @@ from sklearn.base import BaseEstimator
 class MetaData:
     name: str
 
-    @property
     @abstractmethod
-    def param_map(
-        self,
-    ) -> dict[str, list[Any] | NumberParams]:
+    def param_map(self, trial: optuna.Trial) -> dict[str, Any]:
         pass
 
     @abstractmethod
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
         pass
 
-
-class NumberParams(TypedDict):
-    low: float | int
-    high: float | int
-    step: NotRequired[float | int]
-    ty: type
+    @abstractmethod
+    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
+        pass
 
 
 def get_calling_func_name() -> str:

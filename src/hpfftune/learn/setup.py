@@ -1,19 +1,32 @@
 import importlib
+import logging
+import os
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from inspect import getmembers, isclass
+from itertools import product
 from typing import Any
 
-import numpy as np
 import optuna
+import optunahub
 import pandas as pd
-from optuna.samplers import TPESampler
+from optuna.study import StudyDirection
+from pathos.multiprocessing import ProcessPool
 from sklearn.compose import ColumnTransformer
-from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
 
-from hpfftune.helpers import MetaData, NumberParams
+from hpfftune.helpers import MetaData
 from hpfftune.learn import regressors
+from hpfftune.learn.trials import (
+    create_study_metric_trial,
+    create_study_time_trial,
+    run_study_metric_trial,
+    run_study_time_trial,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def wrapped_train_test_split(
@@ -52,91 +65,14 @@ def get_regressor_metadata(module) -> dict[str, MetaData]:
     return avail_regressors
 
 
-def select_params(
-    trial: optuna.Trial,
-    potential_params: dict[str, list[Any] | NumberParams],
-) -> dict[str, Any]:
-    selected_params: dict[str, Any] = {}
-    for param_name, params in potential_params.items():
-        if isinstance(params, list):
-            try:
-                suggested_param: Any = trial.suggest_categorical(param_name, params)
-            except ValueError as e:
-                print(f"{param_name}-{params}")
-                raise e
-        elif isinstance(params, dict):
-            low = params["low"]
-            high = params["high"]
-
-            step = None
-            if "step" in params:
-                step = params["step"]
-
-            ty = params["ty"]
-            if ty is float:
-                suggested_param = trial.suggest_float(param_name, low, high, step=step)
-            elif ty is int:
-                low = int(low)
-                high = int(high)
-
-                if step is None:
-                    suggested_param = trial.suggest_int(param_name, low, high)
-                else:
-                    step = int(step)
-                    suggested_param = trial.suggest_int(
-                        param_name, low, high, step=step
-                    )
-
-        selected_params[param_name] = suggested_param
-
-    return selected_params
-
-
-class Objective:
-    def __init__(self, X: pd.DataFrame, y: pd.Series):
-        self.X = X
-        self.y = y
-
-    def __call__(self, trial: optuna.Trial) -> float:
-        avail_regressors = get_regressor_metadata(regressors)
-
-        regressor_name = trial.suggest_categorical(
-            "regressor", list(avail_regressors.keys())
-        )
-
-        regressor_metadata = avail_regressors[regressor_name]
-        potential_params = regressor_metadata.param_map
-        selected_params = select_params(trial, potential_params)
-        regressor_init = regressor_metadata.regressor(selected_params)
-
-        score: np.ndarray = cross_val_score(regressor_init, self.X, self.y)
-        return score.mean()
-
-
-def setup(dataset: pd.DataFrame, target: str):
+def setup(
+    dataset: pd.DataFrame,
+    target: str,
+    categorical_columns_subset: list[str],
+    numerical_columns_subset: list[str],
+):
     X: pd.DataFrame = dataset.drop([target])
     y: pd.Series = dataset[target]
-
-    categorical_columns_subset = [
-        "format",
-        "task_type",
-        "language",
-        "no_caching",
-        "parallel_backend",
-        "access_kind",
-        "unit_var",
-        "unit_chunk",
-    ]
-
-    numerical_columns_subset = [
-        "dimensions",
-        "num_nodes",
-        "num_ranks",
-        "parallel",
-        "total_filesize",
-        "filesize_per_var",
-        "filesize_per_chunk",
-    ]
 
     X: pd.DataFrame = X[categorical_columns_subset + numerical_columns_subset]
     X[categorical_columns_subset] = X[categorical_columns_subset].astype("category")
@@ -158,12 +94,60 @@ def setup(dataset: pd.DataFrame, target: str):
         columns=new_order,
     )
 
-    sampler = TPESampler(seed=10)
-    study = optuna.create_study(
-        sampler=sampler,
-        direction="maximize",
-        storage="sqlite:///db.sqlite3",
-        study_name="HPFFtune",
-        load_if_exists=True,
+    sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
+
+    avail_regressors = get_regressor_metadata(regressors)
+
+    pool = ProcessPool()
+
+    cpu_count = os.cpu_count()
+
+    scorings: dict[str, StudyDirection] = {
+        "r2": StudyDirection.MAXIMIZE,
+        "neg_mean_squared_error": StudyDirection.MAXIMIZE,
+        "neg_mean_absolute_error": StudyDirection.MAXIMIZE,
+        "d2_absolute_error_score": StudyDirection.MAXIMIZE,
+    }
+    metric_trial_args = list(
+        product([sampler], avail_regressors.items(), scorings.items())
     )
-    study.optimize(Objective(X, y), n_trials=100, show_progress_bar=True)
+
+    studies: list[optuna.Study] = []
+    for trial in metric_trial_args:
+        studies.append(create_study_metric_trial(trial[0], trial[1], trial[2]))
+
+    n_jobs = None if cpu_count is None else cpu_count / len(metric_trial_args)
+    metric_trial_args = product(
+        [n_jobs], avail_regressors.items(), scorings.items(), [(X, y)]
+    )
+
+    metric_trial_args = list(zip(metric_trial_args, studies))
+
+    logger.info(f"Running Metric trials with the following directives: {scorings}")
+    start = time.monotonic()
+    for _ in pool.uimap(run_study_metric_trial, metric_trial_args):
+        pass
+    logger.info(f"Finished Metric trials in {time.monotonic() - start} seconds")
+
+    timings: dict[str, StudyDirection] = {
+        "fit_time": StudyDirection.MINIMIZE,
+        "score_time": StudyDirection.MINIMIZE,
+    }
+    time_trial_args = list(
+        product([sampler], avail_regressors.items(), timings.items())
+    )
+    studies: list[optuna.Study] = []
+    for trial in time_trial_args:
+        studies.append(create_study_time_trial(trial[0], trial[1], trial[2]))
+
+    n_jobs = None if cpu_count is None else cpu_count / len(time_trial_args)
+    time_trial_args = product(
+        [n_jobs], avail_regressors.items(), timings.items(), [(X, y)]
+    )
+    time_trial_args = list(zip(time_trial_args, studies))
+
+    logger.info(f"Running Time trials with the following directives: {timings}")
+    start = time.monotonic()
+    for _ in pool.uimap(run_study_time_trial, time_trial_args):
+        pass
+    logger.info(f"Finished Time trials in {time.monotonic() - start} seconds")
