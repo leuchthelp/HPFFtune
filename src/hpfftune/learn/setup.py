@@ -15,9 +15,9 @@ from optuna.study import StudyDirection
 from pathos.multiprocessing import ProcessPool
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, PowerTransformer
 
-from hpfftune.helpers import MetaData
+from hpfftune.helpers import Data, MetaData
 from hpfftune.learn import regressors
 from hpfftune.learn.trials import (
     create_study_metric_trial,
@@ -63,15 +63,12 @@ def get_regressor_metadata(module) -> dict[str, MetaData]:
     return avail_regressors
 
 
-def setup(
-    dataset: pd.DataFrame,
-    target: str,
+def preprocess(
+    X: pd.DataFrame,
+    y: pd.Series,
     categorical_columns_subset: list[str],
     numerical_columns_subset: list[str],
-):
-    X: pd.DataFrame = dataset.drop([target])
-    y: pd.Series = dataset[target]
-
+) -> tuple[pd.DataFrame, pd.Series]:
     X: pd.DataFrame = X[categorical_columns_subset + numerical_columns_subset]
     X[categorical_columns_subset] = X[categorical_columns_subset].astype("category")
 
@@ -92,11 +89,60 @@ def setup(
         columns=new_order,
     )
 
-    sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
+    scaler = PowerTransformer()
+    X: pd.DataFrame = pd.DataFrame(scaler.fit_transform(X))
 
+    return X, y
+
+
+def setup(
+    dataset: pd.DataFrame,
+    target: str,
+    categorical_columns_subset: list[str],
+    numerical_columns_subset: list[str],
+):
+    X: pd.DataFrame = dataset.drop([target])
+    y: pd.Series = dataset[target]
+
+    X, y = preprocess(X, y, categorical_columns_subset, numerical_columns_subset)
+
+    X_without_100GB: pd.DataFrame = dataset[dataset["total_filesize"] != 100].drop(
+        [target]
+    )
+    y_without_100GB: pd.Series = dataset[dataset["total_filesize"] != 100][target]
+
+    X_without_100GB, y_without_100GB = preprocess(
+        X_without_100GB,
+        y_without_100GB,
+        categorical_columns_subset,
+        numerical_columns_subset,
+    )
+
+    X_with_100GB: pd.DataFrame = dataset[dataset["total_filesize"] == 100].drop(
+        [target]
+    )
+    y_with_100GB: pd.Series = dataset[dataset["total_filesize"] == 100][target]
+
+    X_with_100GB, y_with_100GB = preprocess(
+        X_with_100GB,
+        y_with_100GB,
+        categorical_columns_subset,
+        numerical_columns_subset,
+    )
+
+    datasets: list[Data] = [
+        {"train": (X, y)},
+        {
+            "train": (X_without_100GB, y_without_100GB),
+            "test": (X_with_100GB, y_with_100GB),
+        },
+    ]
+    paths = ["sqlite:///metrics.sqlite3", "sqlite:///removed_100GB_data.sqlite3"]
+
+    sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
     avail_regressors = get_regressor_metadata(regressors)
 
-    processes = 4
+    processes = 2
     pool = ProcessPool(processes=processes)
 
     cpu_count = os.cpu_count()
@@ -113,18 +159,25 @@ def setup(
     }
 
     metric_trial_args = list(
-        product([sampler], avail_regressors.items(), [scorings], [timings])
+        product(
+            [sampler], avail_regressors.items(), [scorings], [timings], paths, datasets
+        )
     )
 
     studies: list[optuna.Study] = []
     for trial in metric_trial_args:
         studies.append(
-            create_study_metric_trial(trial[0], trial[1], trial[2], trial[3])
+            create_study_metric_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
         )
 
     n_jobs = None if cpu_count is None else (cpu_count - processes - 1) / processes
     metric_trial_args = product(
-        [n_jobs], avail_regressors.items(), [scorings], [timings], [(X, y)]
+        [n_jobs],
+        avail_regressors.items(),
+        [scorings],
+        [timings],
+        datasets,
+        paths,
     )
 
     metric_trial_args = list(zip(metric_trial_args, studies))

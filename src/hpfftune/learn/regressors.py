@@ -6,9 +6,9 @@ import optuna
 import pandas as pd
 from sklearn.base import BaseEstimator
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
-from sklearn.linear_model import SGDRegressor
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.linear_model import BayesianRidge, SGDRegressor
 from sklearn.neural_network import MLPRegressor
-from sklearn.preprocessing import RobustScaler
 from sklearn.svm import SVR
 
 from hpfftune.helpers import MetaData
@@ -201,6 +201,54 @@ class MLPMetaData(MetaData):
     def clean_data(
         self, X: pd.DataFrame, y: pd.Series
     ) -> tuple[pd.DataFrame, pd.Series]:
-        scaler = RobustScaler()
-        X: pd.DataFrame = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+        return X.dropna(axis=1), y
+
+
+# @dataclass
+# class GPRMetaData(MetaData):
+#     def __init__(self):
+#         self.name = "guassian_process_reg"
+
+#     def param_map(self, trial: optuna.Trial) -> dict[str, Any]:
+#         return {
+#             "alpha": trial.suggest_float("alpha", 1e-10, 1e-5),
+#             "optimizer": trial.suggest_categorical(
+#                 "optimizer", ["fmin_l_bfgs_b", None]
+#             ),
+#             "n_restarts_optimizer": trial.suggest_int("n_restarts_optimizer", 0, 20),
+#             "normalize_y": trial.suggest_categorical("normalize_y", [True, False]),
+#             "copy_X_train": trial.suggest_categorical("copy_X_train", [True, False]),
+#         }
+
+#     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
+#         return GaussianProcessRegressor(**params)
+
+#     def clean_data(
+#         self, X: pd.DataFrame, y: pd.Series
+#     ) -> tuple[pd.DataFrame, pd.Series]:
+#         return X.dropna(axis=1), y
+
+
+@dataclass
+class BRMetaData(MetaData):
+    def __init__(self):
+        self.name = "bayesian_ridge_reg"
+
+    def param_map(self, trial: optuna.Trial) -> dict[str, Any]:
+        return {
+            "max_iter": trial.suggest_int("max_iter", 100, 10_000, step=100),
+            "alpha_1": trial.suggest_float("alpha_1", 1e-8, 1e-4),
+            "alpha_2": trial.suggest_float("alpha_2", 1e-8, 1e-4),
+            "lambda_1": trial.suggest_float("lambda_1", 1e-8, 1e-4),
+            "lambda_2": trial.suggest_float("lambda_2", 1e-8, 1e-4),
+            "compute_score": trial.suggest_categorical("compute_score", [True, False]),
+            "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
+        }
+
+    def regressor(self, params: dict[str, Any]) -> BaseEstimator:
+        return BayesianRidge(**params)
+
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
         return X.dropna(axis=1), y

@@ -3,15 +3,15 @@ from typing import Any
 
 import numpy as np
 import optuna
-import pandas as pd
 from optuna.study import StudyDirection
 from sklearn.model_selection import (
     BaseCrossValidator,
     KFold,
     cross_validate,
+    permutation_test_score,
 )
 
-from hpfftune.helpers import MetaData
+from hpfftune.helpers import Data, MetaData
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +19,18 @@ logger = logging.getLogger(__name__)
 class MetricTrial:
     def __init__(
         self,
-        X: pd.DataFrame,
-        y: pd.Series,
+        data: Data,
         regressors: dict[str, MetaData],
         scoring: list[str],
         additional: list[str],
         cv: BaseCrossValidator | None = None,
     ):
-        self.X = X
-        self.y = y
+        self.X, self.y = data["train"]
         self.regressors = regressors
+
+        self.X_test, self.y_test = None, None
+        if "test" in data:
+            self.X_test, self.y_test = data["test"]
 
         self.scoring = scoring
         self.additional = additional
@@ -42,15 +44,25 @@ class MetricTrial:
         regressor_metadata = self.regressors[regressor_name]
         selected_params = regressor_metadata.param_map(trial)
         regressor_init = regressor_metadata.regressor(selected_params)
-        X, y = regressor_metadata.clean_data(self.X, self.y)
 
-        score: np.ndarray = cross_validate(
-            estimator=regressor_init,
-            X=X,
-            y=y,
-            cv=self.cv,
-            scoring=self.scoring,
-        )
+        if self.X_test is not None and self.y_test is not None:
+            X, y = regressor_metadata.clean_data(self.X_test, self.y_test)
+            score: np.ndarray = cross_validate(
+                estimator=regressor_init,
+                X=X,
+                y=y,
+                cv=self.cv,
+                scoring=self.scoring,
+            )
+        else:
+            X, y = regressor_metadata.clean_data(self.X, self.y)
+            score: np.ndarray = cross_validate(
+                estimator=regressor_init,
+                X=X,
+                y=y,
+                cv=self.cv,
+                scoring=self.scoring,
+            )
 
         res: list[float] = []
         for metric in self.scoring:
@@ -58,6 +70,9 @@ class MetricTrial:
 
         for metric in self.additional:
             res.append(score[metric].mean())
+
+        _, _, pvalue = permutation_test_score(regressor_init, X, y, random_state=0)
+        res.append(pvalue)
 
         return res
 
@@ -67,12 +82,15 @@ def create_study_metric_trial(
     regressor_meta: tuple[str, MetaData],
     scoring: dict[str, StudyDirection],
     additional: dict[str, StudyDirection],
+    db_path: str,
 ) -> optuna.Study:
     study = optuna.create_study(
         sampler=sampler,
-        directions=list(scoring.values()) + list(additional.values()),
-        storage="sqlite:///newdb.sqlite3",
-        study_name=f"{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}",
+        directions=list(scoring.values())
+        + list(additional.values())
+        + [StudyDirection.MINIMIZE],
+        storage=db_path,
+        study_name=f"{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}-[p_value]",
         load_if_exists=True,
     )
     return study
@@ -85,7 +103,8 @@ def run_study_metric_trial(
             tuple[str, MetaData],
             dict[str, StudyDirection],
             dict[str, StudyDirection],
-            tuple[pd.DataFrame, pd.Series],
+            Data,
+            str,
         ],
         optuna.Study,
     ],
@@ -94,14 +113,13 @@ def run_study_metric_trial(
     regressor_meta: tuple[str, MetaData] = args[0][1]
     scoring: dict[str, StudyDirection] = args[0][2]
     additional: dict[str, StudyDirection] = args[0][3]
-    data: tuple[pd.DataFrame, pd.Series] = args[0][4]
+    data: Data = args[0][4]
     study: optuna.Study = args[1]
 
     try:
         study.optimize(
             MetricTrial(
-                data[0],
-                data[1],
+                data,
                 {regressor_meta[0]: regressor_meta[1]},
                 list(scoring.keys()),
                 list(additional.keys()),

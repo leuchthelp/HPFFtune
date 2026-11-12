@@ -2,7 +2,7 @@ import inspect
 import types
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 import optuna
 import pandas as pd
@@ -22,8 +22,15 @@ class MetaData:
         pass
 
     @abstractmethod
-    def clean_data(self, X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
         pass
+
+
+class Data(TypedDict):
+    train: tuple[pd.DataFrame, pd.Series]
+    test: NotRequired[tuple[pd.DataFrame, pd.Series]]
 
 
 def get_calling_func_name() -> str:
