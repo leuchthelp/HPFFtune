@@ -170,7 +170,7 @@ def setup(
             create_study_metric_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
         )
 
-    n_jobs = None if cpu_count is None else (cpu_count - processes - 1) / processes
+    n_jobs = None #if cpu_count is None else (cpu_count - processes - 1) / processes
     metric_trial_args = product(
         [n_jobs],
         avail_regressors.items(),
