@@ -8,6 +8,7 @@ from sklearn.base import BaseEstimator
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import SGDRegressor
 from sklearn.neural_network import MLPRegressor
+from sklearn.preprocessing import RobustScaler
 from sklearn.svm import SVR
 
 from hpfftune.helpers import MetaData
@@ -44,8 +45,10 @@ class HistGradBoostRegMetaData(MetaData):
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
         return HistGradientBoostingRegressor(**params)
 
-    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        return X, y
 
 
 @dataclass
@@ -76,8 +79,10 @@ class RandomForestRegressorMetaData(MetaData):
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
         return RandomForestRegressor(**params)
 
-    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        return X, y
 
 
 @dataclass
@@ -102,8 +107,10 @@ class SVRMetaData(MetaData):
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
         return SVR(**params)
 
-    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X.dropna(axis=1)
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        return X.dropna(axis=1), y
 
 
 @dataclass
@@ -134,7 +141,7 @@ class SGDMetaData(MetaData):
             "epsilon": trial.suggest_float("epsilon", 0.1, sys.maxsize),
             "learning_rate": trial.suggest_categorical(
                 "learning_rate",
-                ["constant", "optimal", "invscaling", "adaptive", "pa1", "pa2"],
+                ["constant", "optimal", "invscaling", "adaptive"],
             ),
             "eta0": trial.suggest_float("eta0", 0.01, sys.maxsize),
             "early_stopping": trial.suggest_categorical(
@@ -149,8 +156,10 @@ class SGDMetaData(MetaData):
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
         return SGDRegressor(**params)
 
-    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X.dropna(axis=1)
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        return X.dropna(axis=1), y
 
 
 @dataclass
@@ -189,5 +198,9 @@ class MLPMetaData(MetaData):
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
         return MLPRegressor(**params)
 
-    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
-        return X.dropna(axis=1)
+    def clean_data(
+        self, X: pd.DataFrame, y: pd.Series
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        scaler = RobustScaler()
+        X: pd.DataFrame = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+        return X.dropna(axis=1), y

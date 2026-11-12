@@ -21,9 +21,7 @@ from hpfftune.helpers import MetaData
 from hpfftune.learn import regressors
 from hpfftune.learn.trials import (
     create_study_metric_trial,
-    create_study_time_trial,
     run_study_metric_trial,
-    run_study_time_trial,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,21 +107,24 @@ def setup(
         "neg_mean_absolute_error": StudyDirection.MAXIMIZE,
         "d2_absolute_error_score": StudyDirection.MAXIMIZE,
     }
+    timings: dict[str, StudyDirection] = {
+        "fit_time": StudyDirection.MINIMIZE,
+        "score_time": StudyDirection.MINIMIZE,
+    }
+
     metric_trial_args = list(
-        product([sampler], avail_regressors.items(), scorings.items())
+        product([sampler], avail_regressors.items(), [scorings], [timings])
     )
 
     studies: list[optuna.Study] = []
     for trial in metric_trial_args:
-        studies.append(create_study_metric_trial(trial[0], trial[1], trial[2]))
+        studies.append(
+            create_study_metric_trial(trial[0], trial[1], trial[2], trial[3])
+        )
 
-    n_jobs = (
-        None
-        if cpu_count is None
-        else (cpu_count - processes - 1) / len(metric_trial_args)
-    )
+    n_jobs = None if cpu_count is None else (cpu_count - processes - 1) / processes
     metric_trial_args = product(
-        [n_jobs], avail_regressors.items(), scorings.items(), [(X, y)]
+        [n_jobs], avail_regressors.items(), [scorings], [timings], [(X, y)]
     )
 
     metric_trial_args = list(zip(metric_trial_args, studies))
@@ -133,30 +134,3 @@ def setup(
     for _ in pool.uimap(run_study_metric_trial, metric_trial_args):
         pass
     logger.info(f"Finished Metric trials in {time.monotonic() - start} seconds")
-
-    timings: dict[str, StudyDirection] = {
-        "fit_time": StudyDirection.MINIMIZE,
-        "score_time": StudyDirection.MINIMIZE,
-    }
-    time_trial_args = list(
-        product([sampler], avail_regressors.items(), timings.items())
-    )
-    studies: list[optuna.Study] = []
-    for trial in time_trial_args:
-        studies.append(create_study_time_trial(trial[0], trial[1], trial[2]))
-
-    n_jobs = (
-        None
-        if cpu_count is None
-        else (cpu_count - processes - 1) / len(metric_trial_args)
-    )
-    time_trial_args = product(
-        [n_jobs], avail_regressors.items(), timings.items(), [(X, y)]
-    )
-    time_trial_args = list(zip(time_trial_args, studies))
-
-    logger.info(f"Running Time trials with the following directives: {timings}")
-    start = time.monotonic()
-    for _ in pool.uimap(run_study_time_trial, time_trial_args):
-        pass
-    logger.info(f"Finished Time trials in {time.monotonic() - start} seconds")

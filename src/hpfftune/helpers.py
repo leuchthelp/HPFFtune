@@ -22,7 +22,7 @@ class MetaData:
         pass
 
     @abstractmethod
-    def clean_data(self, X: pd.DataFrame) -> pd.DataFrame:
+    def clean_data(self, X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
         pass
 
 
