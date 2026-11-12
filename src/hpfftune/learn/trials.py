@@ -72,7 +72,7 @@ def create_study_metric_trial(
         sampler=sampler,
         directions=list(scoring.values()) + list(additional.values()),
         storage="sqlite:///newdb.sqlite3",
-        study_name=f"{regressor_meta[0]}-{scoring.keys()}-{additional.keys()}",
+        study_name=f"{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}",
         load_if_exists=True,
     )
     return study
