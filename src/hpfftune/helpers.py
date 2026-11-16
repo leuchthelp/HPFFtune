@@ -31,6 +31,7 @@ class MetaData:
 class Data(TypedDict):
     train: tuple[pd.DataFrame, pd.Series]
     test: NotRequired[tuple[pd.DataFrame, pd.Series]]
+    path: str
 
 
 def get_calling_func_name() -> str:

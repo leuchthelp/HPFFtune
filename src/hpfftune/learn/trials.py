@@ -82,15 +82,17 @@ def create_study_metric_trial(
     regressor_meta: tuple[str, MetaData],
     scoring: dict[str, StudyDirection],
     additional: dict[str, StudyDirection],
-    db_path: str,
+    data: Data,
 ) -> optuna.Study:
+    name = data["path"].split("/")[-1].split(".")[0]
+
     study = optuna.create_study(
         sampler=sampler,
         directions=list(scoring.values())
         + list(additional.values())
         + [StudyDirection.MINIMIZE],
-        storage=db_path,
-        study_name=f"{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}-[p_value]",
+        storage=data["path"],
+        study_name=f"{name}-{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}-[p_value]",
         load_if_exists=True,
     )
     return study

@@ -131,18 +131,18 @@ def setup(
     )
 
     datasets: list[Data] = [
-        {"train": (X, y)},
+        {"train": (X, y), "path": "sqlite:///metrics.sqlite3"},
         {
             "train": (X_without_100GB, y_without_100GB),
             "test": (X_with_100GB, y_with_100GB),
+            "path": "sqlite:///removed_100GB_data.sqlite3",
         },
     ]
-    paths = ["sqlite:///metrics.sqlite3", "sqlite:///removed_100GB_data.sqlite3"]
 
     sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
     avail_regressors = get_regressor_metadata(regressors)
 
-    processes = 2
+    processes = 4
     pool = ProcessPool(processes=processes)
 
     cpu_count = os.cpu_count()
@@ -159,9 +159,7 @@ def setup(
     }
 
     metric_trial_args = list(
-        product(
-            [sampler], avail_regressors.items(), [scorings], [timings], paths, datasets
-        )
+        product([sampler], avail_regressors.items(), [scorings], [timings], datasets)
     )
 
     studies: list[optuna.Study] = []
@@ -170,14 +168,13 @@ def setup(
             create_study_metric_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
         )
 
-    n_jobs = None #if cpu_count is None else (cpu_count - processes - 1) / processes
+    n_jobs = None  # if cpu_count is None else (cpu_count - processes - 1) / processes
     metric_trial_args = product(
         [n_jobs],
         avail_regressors.items(),
         [scorings],
         [timings],
         datasets,
-        paths,
     )
 
     metric_trial_args = list(zip(metric_trial_args, studies))
