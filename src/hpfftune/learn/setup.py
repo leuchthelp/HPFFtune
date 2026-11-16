@@ -100,6 +100,7 @@ def setup(
     target: str,
     categorical_columns_subset: list[str],
     numerical_columns_subset: list[str],
+    just_export: bool = False
 ):
     X: pd.DataFrame = dataset.drop([target])
     y: pd.Series = dataset[target]
@@ -142,10 +143,6 @@ def setup(
     sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
     avail_regressors = get_regressor_metadata(regressors)
 
-    processes = 4
-    pool = ProcessPool(processes=processes)
-
-    cpu_count = os.cpu_count()
 
     scorings: dict[str, StudyDirection] = {
         "r2": StudyDirection.MAXIMIZE,
@@ -168,19 +165,36 @@ def setup(
             create_study_metric_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
         )
 
-    n_jobs = None  # if cpu_count is None else (cpu_count - processes - 1) / processes
-    metric_trial_args = product(
-        [n_jobs],
-        avail_regressors.items(),
-        [scorings],
-        [timings],
-        datasets,
-    )
+    if just_export is False:
+        processes = 4
+        cpu_count = os.cpu_count()
+        n_jobs = None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+        metric_trial_args = product(
+            [n_jobs],
+            avail_regressors.items(),
+            [scorings],
+            [timings],
+            datasets,
+        )
+    
+        metric_trial_args = list(zip(metric_trial_args, studies))
+    
+        pool = ProcessPool(processes=processes)
+        logger.info(f"Running Metric trials with the following directives: {scorings}")
+        start = time.monotonic()
+        for _ in pool.uimap(run_study_metric_trial, metric_trial_args):
+            pass
+        logger.info(f"Finished Metric trials in {time.monotonic() - start} seconds")
+    else:
+        df_studies = [study.trials_dataframe() for study in studies]
+        tmp = pd.concat(df_studies)
 
-    metric_trial_args = list(zip(metric_trial_args, studies))
+        new_names = list(scorings.keys()) + list(timings.keys()) + ["pvalue"]
+        
+        renameables: dict[str, str] = {}
 
-    logger.info(f"Running Metric trials with the following directives: {scorings}")
-    start = time.monotonic()
-    for _ in pool.uimap(run_study_metric_trial, metric_trial_args):
-        pass
-    logger.info(f"Finished Metric trials in {time.monotonic() - start} seconds")
+        for idx, name in enumerate(new_names):
+            renameables[f"values_{idx}"] = name
+
+        tmp = tmp.rename(columns=renameables)
+        tmp.to_json("sample-data/trials.json", orient="records")

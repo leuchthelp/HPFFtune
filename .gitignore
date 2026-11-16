@@ -15,4 +15,5 @@ site
 *.DS_Store
 *.nc
 *.h5
+*.json
 #*.sqlite3
