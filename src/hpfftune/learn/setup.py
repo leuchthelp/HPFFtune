@@ -75,7 +75,7 @@ def setup(
     target: str,
     categorical_columns_subset: list[str],
     numerical_columns_subset: list[str],
-    just_export: bool = False
+    just_export: bool = False,
 ):
     X: pd.DataFrame = dataset.drop([target])
     y: pd.Series = dataset[target]
@@ -93,20 +93,28 @@ def setup(
         numerical_columns_subset,
     )
 
+    X_with_100GB: pd.DataFrame = dataset[dataset["total_filesize"] == 100].drop(
+        [target]
+    )
+    X_with_100GB = preprocess(
+        X_with_100GB,
+        categorical_columns_subset,
+        numerical_columns_subset,
+    )
+
     y_with_100GB: pd.Series = dataset[dataset["total_filesize"] == 100][target]
 
     datasets: list[Data] = [
         {"train": (X, y), "path": "sqlite:///v2_metrics.sqlite3"},
         {
             "train": (X_without_100GB, y_without_100GB),
-            "test": y_with_100GB,
+            "test": (X_with_100GB, y_with_100GB),
             "path": "sqlite:///v2_removed_100GB_data.sqlite3",
         },
     ]
 
     sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
     avail_regressors = get_regressor_metadata(regressors)
-
 
     scorings: dict[str, StudyDirection] = {
         "r2": StudyDirection.MAXIMIZE,
@@ -132,7 +140,9 @@ def setup(
     if just_export is False:
         processes = 4
         cpu_count = os.cpu_count()
-        n_jobs = None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+        n_jobs = (
+            None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+        )
         metric_trial_args = product(
             [n_jobs],
             avail_regressors.items(),
@@ -140,9 +150,9 @@ def setup(
             [timings],
             datasets,
         )
-    
+
         metric_trial_args = list(zip(metric_trial_args, studies))
-    
+
         pool = ProcessPool(processes=processes)
         logger.info(f"Running Metric trials with the following directives: {scorings}")
         start = time.monotonic()
@@ -154,7 +164,7 @@ def setup(
         tmp = pd.concat(df_studies)
 
         new_names = list(scorings.keys()) + list(timings.keys()) + ["pvalue"]
-        
+
         renameables: dict[str, str] = {}
 
         for idx, name in enumerate(new_names):

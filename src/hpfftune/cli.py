@@ -76,4 +76,4 @@ def cli(ds_path: Path | None = None, target: str | None = None):
         "filesize_per_chunk",
     ]
 
-    setup(tmp, target, categorical_columns_subset, numerical_columns_subset, True)
+    setup(tmp, target, categorical_columns_subset, numerical_columns_subset)

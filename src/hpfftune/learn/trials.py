@@ -1,4 +1,6 @@
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -7,6 +9,7 @@ import pandas as pd
 from optuna.study import StudyDirection
 from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
+from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
     BaseCrossValidator,
     KFold,
@@ -33,9 +36,9 @@ class MetricTrial:
         self.X, self.y = data["train"]
         self.regressors = regressors
 
-        self.y_test = None
+        self.X_test, self.y_test = None, None
         if "test" in data:
-            self.y_test = data["test"]
+            self.X_test, self.y_test = data["test"]
 
         self.scoring = scoring
         self.additional = additional
@@ -62,6 +65,38 @@ class MetricTrial:
             ]
         )
 
+    def apply_custom_validate(
+        self,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        pipe: Pipeline,
+    ) -> dict[str, np.ndarray]:
+
+        res: dict[str, np.ndarray] = {}
+        score_time: list[float] = []
+
+        start = time.monotonic()
+        pipe: Pipeline = pipe.fit(X_train, y_train)
+        fit_time: list[float] = [time.monotonic() - start]
+
+        for name in self.scoring:
+            scorer: Callable = get_scorer(name)
+
+            start = time.monotonic()
+            score: float = scorer(
+                estimator=pipe,
+                X=X_test,
+                y_true=y_test,
+            )
+            score_time.append(time.monotonic() - start)
+            res[f"test_{name}"] = np.array(score)
+
+        res["fit_time"] = np.array(fit_time)
+        res["score_time"] = np.array(score_time)
+        return res
+
     def __call__(self, trial: optuna.Trial) -> list[float]:
         regressor_name = trial.suggest_categorical(
             "regressor", list(self.regressors.keys())
@@ -71,27 +106,33 @@ class MetricTrial:
         selected_params = regressor_metadata.param_map(trial)
         regressor_init = regressor_metadata.regressor(selected_params)
 
-        X, y = regressor_metadata.clean_data(
-            self.X, self.y if self.y_test is None else self.y_test
-        )
-        pipe = self.gen_pipeline(regressor_init, regressor_name, X)
+        if self.X_test is not None and self.y_test is not None:
+            X, y = regressor_metadata.clean_data(self.X_test, self.y_test)
+            X_train, y_train = regressor_metadata.clean_data(self.X, self.y)
+            pipe = self.gen_pipeline(regressor_init, regressor_name, X)
 
-        score: np.ndarray = cross_validate(
-            estimator=pipe,
-            X=X,
-            y=y,
-            cv=self.cv,
-            scoring=self.scoring,
-        )
+            score: dict[str, np.ndarray] = self.apply_custom_validate(
+                X, y, X_train, y_train, pipe
+            )
+        else:
+            X, y = regressor_metadata.clean_data(self.X, self.y)
+            pipe = self.gen_pipeline(regressor_init, regressor_name, X)
+
+            score: dict[str, np.ndarray] = cross_validate(
+                estimator=pipe,
+                X=X,
+                y=y,
+                cv=self.cv,
+                scoring=self.scoring,
+            )
 
         res: list[float] = []
         for metric in self.scoring:
             res.append(score[f"test_{metric}"].mean())
-
         for metric in self.additional:
             res.append(score[metric].mean())
 
-        _, _, pvalue = permutation_test_score(regressor_init, X, y, random_state=1)
+        _, _, pvalue = permutation_test_score(pipe, X, y, random_state=1)
         res.append(pvalue)
 
         return res

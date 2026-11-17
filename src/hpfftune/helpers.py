@@ -30,7 +30,7 @@ class MetaData:
 
 class Data(TypedDict):
     train: tuple[pd.DataFrame, pd.Series]
-    test: NotRequired[pd.Series]
+    test: NotRequired[tuple[pd.DataFrame, pd.Series]]
     path: str
 
 
