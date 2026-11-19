@@ -187,7 +187,7 @@ def run_study_metric_trial(
                 list(scoring.keys()),
                 list(additional.keys()),
             ),
-            n_trials=50,
+            n_trials=25,
             n_jobs=n_jobs if n_jobs else 1,
             show_progress_bar=True,
         )
