@@ -1,15 +1,23 @@
 import logging
+import time
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 import optuna
+import pandas as pd
 from optuna.study import StudyDirection
+from sklearn.base import BaseEstimator
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
     BaseCrossValidator,
     KFold,
     cross_validate,
     permutation_test_score,
 )
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OrdinalEncoder, PowerTransformer
 
 from hpfftune.helpers import Data, MetaData
 
@@ -34,7 +42,60 @@ class MetricTrial:
 
         self.scoring = scoring
         self.additional = additional
-        self.cv = KFold(n_splits=5, shuffle=True) if cv is None else cv
+        self.cv = KFold(n_splits=5, shuffle=True, random_state=1) if cv is None else cv
+
+    def gen_pipeline(
+        self, estimator: BaseEstimator, name: str, X: pd.DataFrame
+    ) -> Pipeline:
+        columns_to_encode: list[str] = X.select_dtypes(
+            exclude=["float", "int"]
+        ).columns.to_list()
+
+        return Pipeline(
+            [
+                (
+                    "column_transformer",
+                    ColumnTransformer(
+                        transformers=[("oe", OrdinalEncoder(), columns_to_encode)],
+                        remainder="passthrough",
+                    ),
+                ),
+                ("power_transformer", PowerTransformer()),
+                (name, estimator),
+            ]
+        )
+
+    def apply_custom_validate(
+        self,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        pipe: Pipeline,
+    ) -> dict[str, np.ndarray]:
+
+        res: dict[str, np.ndarray] = {}
+        score_time: list[float] = []
+
+        start = time.monotonic()
+        pipe: Pipeline = pipe.fit(X_train, y_train)
+        fit_time: list[float] = [time.monotonic() - start]
+
+        for name in self.scoring:
+            scorer: Callable = get_scorer(name)
+
+            start = time.monotonic()
+            score: float = scorer(
+                estimator=pipe,
+                X=X_test,
+                y_true=y_test,
+            )
+            score_time.append(time.monotonic() - start)
+            res[f"test_{name}"] = np.array(score)
+
+        res["fit_time"] = np.array(fit_time)
+        res["score_time"] = np.array(score_time)
+        return res
 
     def __call__(self, trial: optuna.Trial) -> list[float]:
         regressor_name = trial.suggest_categorical(
@@ -47,17 +108,18 @@ class MetricTrial:
 
         if self.X_test is not None and self.y_test is not None:
             X, y = regressor_metadata.clean_data(self.X_test, self.y_test)
-            score: np.ndarray = cross_validate(
-                estimator=regressor_init,
-                X=X,
-                y=y,
-                cv=self.cv,
-                scoring=self.scoring,
+            X_train, y_train = regressor_metadata.clean_data(self.X, self.y)
+            pipe = self.gen_pipeline(regressor_init, regressor_name, X)
+
+            score: dict[str, np.ndarray] = self.apply_custom_validate(
+                X, y, X_train, y_train, pipe
             )
         else:
             X, y = regressor_metadata.clean_data(self.X, self.y)
-            score: np.ndarray = cross_validate(
-                estimator=regressor_init,
+            pipe = self.gen_pipeline(regressor_init, regressor_name, X)
+
+            score: dict[str, np.ndarray] = cross_validate(
+                estimator=pipe,
                 X=X,
                 y=y,
                 cv=self.cv,
@@ -67,11 +129,10 @@ class MetricTrial:
         res: list[float] = []
         for metric in self.scoring:
             res.append(score[f"test_{metric}"].mean())
-
         for metric in self.additional:
             res.append(score[metric].mean())
 
-        _, _, pvalue = permutation_test_score(regressor_init, X, y, random_state=0)
+        _, _, pvalue = permutation_test_score(pipe, X, y, random_state=1)
         res.append(pvalue)
 
         return res
@@ -126,7 +187,7 @@ def run_study_metric_trial(
                 list(scoring.keys()),
                 list(additional.keys()),
             ),
-            n_trials=50,
+            n_trials=25,
             n_jobs=n_jobs if n_jobs else 1,
             show_progress_bar=True,
         )

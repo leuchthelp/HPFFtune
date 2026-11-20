@@ -68,6 +68,9 @@ class RandomForestRegressorMetaData(MetaData):
             "min_weight_fraction_leaf": trial.suggest_float(
                 "min_weight_fraction_leaf", 0, 0.5
             ),
+            "class_weight": trial.suggest_categorical(
+                "class_weight", ["balanced", "balanced_subsample", None]
+            ),
             "max_features": trial.suggest_float("max_features", 0, 1),
             "max_leaf_nodes": trial.suggest_int("max_leaf_nodes", 2, 50),
             "min_impurity_decrease": trial.suggest_float("min_impurity_decrease", 0, 1),

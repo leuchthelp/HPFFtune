@@ -3,7 +3,6 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from copy import deepcopy
 from inspect import getmembers, isclass
 from itertools import product
 from typing import Any
@@ -13,9 +12,7 @@ import optunahub
 import pandas as pd
 from optuna.study import StudyDirection
 from pathos.multiprocessing import ProcessPool
-from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OrdinalEncoder, PowerTransformer
 
 from hpfftune.helpers import Data, MetaData
 from hpfftune.learn import regressors
@@ -65,34 +62,12 @@ def get_regressor_metadata(module) -> dict[str, MetaData]:
 
 def preprocess(
     X: pd.DataFrame,
-    y: pd.Series,
     categorical_columns_subset: list[str],
     numerical_columns_subset: list[str],
-) -> tuple[pd.DataFrame, pd.Series]:
+) -> pd.DataFrame:
     X: pd.DataFrame = X[categorical_columns_subset + numerical_columns_subset]
     X[categorical_columns_subset] = X[categorical_columns_subset].astype("category")
-
-    columns_to_encode: list[str] = X.select_dtypes(
-        exclude=["float", "int"]
-    ).columns.to_list()
-
-    new_order = deepcopy(columns_to_encode)
-    remainders: list[str] = X.select_dtypes(include=["float", "int"]).columns.to_list()
-    new_order.extend(remainders)
-    preprocessor = ColumnTransformer(
-        transformers=[("oe", OrdinalEncoder(), columns_to_encode)],
-        remainder="passthrough",
-    )
-
-    X: pd.DataFrame = pd.DataFrame(
-        preprocessor.fit_transform(X),
-        columns=new_order,
-    )
-
-    scaler = PowerTransformer()
-    X: pd.DataFrame = pd.DataFrame(scaler.fit_transform(X))
-
-    return X, y
+    return X
 
 
 def setup(
@@ -100,21 +75,20 @@ def setup(
     target: str,
     categorical_columns_subset: list[str],
     numerical_columns_subset: list[str],
-    just_export: bool = False
+    just_export: bool = False,
 ):
     X: pd.DataFrame = dataset.drop([target])
     y: pd.Series = dataset[target]
 
-    X, y = preprocess(X, y, categorical_columns_subset, numerical_columns_subset)
+    X = preprocess(X, categorical_columns_subset, numerical_columns_subset)
 
     X_without_100GB: pd.DataFrame = dataset[dataset["total_filesize"] != 100].drop(
         [target]
     )
     y_without_100GB: pd.Series = dataset[dataset["total_filesize"] != 100][target]
 
-    X_without_100GB, y_without_100GB = preprocess(
+    X_without_100GB = preprocess(
         X_without_100GB,
-        y_without_100GB,
         categorical_columns_subset,
         numerical_columns_subset,
     )
@@ -122,27 +96,25 @@ def setup(
     X_with_100GB: pd.DataFrame = dataset[dataset["total_filesize"] == 100].drop(
         [target]
     )
-    y_with_100GB: pd.Series = dataset[dataset["total_filesize"] == 100][target]
-
-    X_with_100GB, y_with_100GB = preprocess(
+    X_with_100GB = preprocess(
         X_with_100GB,
-        y_with_100GB,
         categorical_columns_subset,
         numerical_columns_subset,
     )
 
+    y_with_100GB: pd.Series = dataset[dataset["total_filesize"] == 100][target]
+
     datasets: list[Data] = [
-        {"train": (X, y), "path": "sqlite:///metrics.sqlite3"},
+        {"train": (X, y), "path": "sqlite:///v2_metrics.sqlite3"},
         {
             "train": (X_without_100GB, y_without_100GB),
             "test": (X_with_100GB, y_with_100GB),
-            "path": "sqlite:///removed_100GB_data.sqlite3",
+            "path": "sqlite:///v2_removed_100GB_data.sqlite3",
         },
     ]
 
     sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
     avail_regressors = get_regressor_metadata(regressors)
-
 
     scorings: dict[str, StudyDirection] = {
         "r2": StudyDirection.MAXIMIZE,
@@ -168,7 +140,9 @@ def setup(
     if just_export is False:
         processes = 4
         cpu_count = os.cpu_count()
-        n_jobs = None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+        n_jobs = (
+            None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+        )
         metric_trial_args = product(
             [n_jobs],
             avail_regressors.items(),
@@ -176,9 +150,9 @@ def setup(
             [timings],
             datasets,
         )
-    
+
         metric_trial_args = list(zip(metric_trial_args, studies))
-    
+
         pool = ProcessPool(processes=processes)
         logger.info(f"Running Metric trials with the following directives: {scorings}")
         start = time.monotonic()
@@ -190,7 +164,7 @@ def setup(
         tmp = pd.concat(df_studies)
 
         new_names = list(scorings.keys()) + list(timings.keys()) + ["pvalue"]
-        
+
         renameables: dict[str, str] = {}
 
         for idx, name in enumerate(new_names):
