@@ -30,7 +30,7 @@ class SMAC3SamplerMetaData(MetaData):
             "search_space": {},
             "n_trials": None,
             "surrogate_model_type": trial.suggest_categorical(
-                "surrogate_model_type", ["rf", "gp", "gp_mcmc"]
+                "surrogate_model_type", ["rf"]
             ),
         }
 

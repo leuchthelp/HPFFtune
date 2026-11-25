@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install as install_rich_traceback
 
-from hpfftune.learn.setup import setup, sampler_test
+from hpfftune.learn.setup import sampler_comb_test, sampler_test, setup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,5 +77,5 @@ def cli(ds_path: Path | None = None, target: str | None = None):
     ]
 
     # setup(tmp, target, categorical_columns_subset, numerical_columns_subset)
-
+    sampler_comb_test(tmp, target, categorical_columns_subset, numerical_columns_subset)
     sampler_test(tmp, target, categorical_columns_subset, numerical_columns_subset)

@@ -1,6 +1,7 @@
 import logging
 import time
 from collections.abc import Callable
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -232,20 +233,24 @@ class InnerSampleTrial:
             ),
         }
 
-        values: pd.Series = self.X.loc[
-            self.X[list(parameters.keys())].isin(list(parameters.values())).all(axis=1),
-            :,
-        ]
+        query_string = "".join(
+            f'({key} == "{val}") and ' for key, val in parameters.items()
+        )
+
+        query_string = query_string.rstrip("and ")
+
+        values: pd.DataFrame = self.X.astype(str).query(query_string)
         values = values.reset_index(drop=True)
 
         res: list[float] = []
         for entry in self.scoring:
-            r = 0
+            r: float | None = 0
 
-            if not values.empty:
-                r = float(np.array(values[entry]).mean())
+            df: pd.Series = values[entry]
+            if not df.empty:
+                r = float(df.mean())
 
-            res.append(r)
+            res.append(r if r is not None else 0)
         return res
 
 
@@ -322,13 +327,17 @@ class SamplerTrial:
             load_if_exists=True,
         )
 
-        study.optimize(
-            InnerSampleTrial(self.X, self.scoring),
-            n_trials=n_trials,
-            show_progress_bar=True,
-        )
+        try:
+            study.optimize(
+                InnerSampleTrial(self.X, self.scoring),
+                n_trials=n_trials,
+                show_progress_bar=True,
+            )
 
-        return [study.best_value, 1]
+            return [study.best_value, 1]
+
+        except ValueError:
+            return [0, 1]
 
 
 def run_study_sampler_trial(
@@ -356,6 +365,103 @@ def run_study_sampler_trial(
                 data,
                 {sampler_meta[0]: sampler_meta[1]},
                 scoring,
+            ),
+            n_trials=5,
+            n_jobs=n_jobs if n_jobs else 1,
+            show_progress_bar=True,
+        )
+    except ValueError:
+        pass
+
+
+class SamplerCombTrial:
+    def __init__(
+        self,
+        data: Data,
+        regressors: dict[str, MetaData],
+        scoring: list[str],
+        cv: BaseCrossValidator | None = None,
+    ):
+        X, _ = data["train"]
+        self.regressors = regressors
+
+        X: pd.DataFrame = X[X["task_type"] == "read"]
+        X.drop_duplicates()
+        self.X_test = X
+
+        X: pd.DataFrame = X.sample(100)
+        self.y: pd.Series = X[*scoring]
+        self.X: pd.DataFrame = X.drop(columns=scoring)
+
+        self.scoring = scoring
+        self.cv = KFold(n_splits=5, shuffle=True, random_state=1) if cv is None else cv
+
+    def gen_pipeline(
+        self, estimator: BaseEstimator, name: str, X: pd.DataFrame
+    ) -> Pipeline:
+        columns_to_encode: list[str] = X.select_dtypes(
+            exclude=["float", "int"]
+        ).columns.to_list()
+
+        return Pipeline(
+            [
+                (
+                    "column_transformer",
+                    ColumnTransformer(
+                        transformers=[("oe", OrdinalEncoder(), columns_to_encode)],
+                        remainder="passthrough",
+                    ),
+                ),
+                ("power_transformer", PowerTransformer()),
+                (name, estimator),
+            ]
+        )
+
+    def __call__(self, trial: optuna.Trial) -> list[float]:
+        regressor_name = trial.suggest_categorical(
+            "regressor", list(self.regressors.keys())
+        )
+
+        regressor_metadata = self.regressors[regressor_name]
+        selected_params = regressor_metadata.param_map(trial)
+        regressor_init = regressor_metadata.regressor(selected_params)
+
+        X, y = regressor_metadata.clean_data(self.X, self.y)
+        pipe = self.gen_pipeline(regressor_init, regressor_name, X)
+
+        pipe.fit(X, y)
+
+        pred: pd.Series = pd.Series(pipe.predict(self.X_test))
+        idx = pred.idxmax()
+        trial.suggest_categorical("config", [str(dict(self.X_test[idx]))])
+        return [pred.max(), 1]
+
+
+def run_study_sampler_comb_trial(
+    args: tuple[
+        tuple[
+            int,
+            tuple[str, MetaData],
+            dict[str, StudyDirection],
+            dict[str, StudyDirection],
+            Data,
+            str,
+        ],
+        optuna.Study,
+    ],
+) -> None:
+    n_jobs: int | None = args[0][0]
+    regressor_meta: tuple[str, MetaData] = args[0][1]
+    scoring: dict[str, StudyDirection] = args[0][2]
+    data: Data = args[0][4]
+    study: optuna.Study = args[1]
+
+    try:
+        study.optimize(
+            SamplerCombTrial(
+                data,
+                {regressor_meta[0]: regressor_meta[1]},
+                list(scoring.keys()),
             ),
             n_trials=5,
             n_jobs=n_jobs if n_jobs else 1,

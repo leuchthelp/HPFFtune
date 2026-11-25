@@ -17,6 +17,7 @@ from hpfftune.learn import regressors, samplers
 from hpfftune.learn.trials import (
     create_study_trial,
     run_study_metric_trial,
+    run_study_sampler_comb_trial,
     run_study_sampler_trial,
 )
 
@@ -216,6 +217,77 @@ def sampler_test(
         logger.info(f"Running Sampler trials with the following directives: {scorings}")
         start = time.monotonic()
         for _ in pool.uimap(run_study_sampler_trial, sampler_trial_args):
+            pass
+        logger.info(f"Finished Sampler trials in {time.monotonic() - start} seconds")
+    else:
+        df_studies = [study.trials_dataframe() for study in studies]
+        tmp = pd.concat(df_studies)
+
+        new_names = list(scorings.keys())
+
+        renameables: dict[str, str] = {}
+
+        for idx, name in enumerate(new_names):
+            renameables[f"values_{idx}"] = name
+
+        tmp = tmp.rename(columns=renameables)
+        tmp.to_json("sample-data/sampler-trials.json", orient="records")
+
+
+def sampler_comb_test(
+    dataset: pd.DataFrame,
+    target: str,
+    categorical_columns_subset: list[str],
+    numerical_columns_subset: list[str],
+    just_export: bool = False,
+) -> None:
+
+    numerical_columns_subset.append(target)
+    X = preprocess(dataset, categorical_columns_subset, numerical_columns_subset)
+
+    datasets: list[Data] = [
+        {"train": (X, pd.Series()), "path": "sqlite:///samplers_comb.sqlite3"},
+    ]
+
+    sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
+    avail_samplers = get_metadata(regressors)
+    avail_samplers: dict[str, MetaData] = {
+        "hist_grad_boost_reg": avail_samplers["hist_grad_boost_reg"]
+    }
+
+    scorings: dict[str, StudyDirection] = {
+        target: StudyDirection.MAXIMIZE,
+    }
+    sampler_trial_args = list(
+        product([sampler], avail_samplers.items(), [scorings], [{}], datasets)
+    )
+
+    studies: list[optuna.Study] = []
+    for trial in sampler_trial_args:
+        studies.append(
+            create_study_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
+        )
+
+    if just_export is False:
+        processes = 4
+        cpu_count = os.cpu_count()  # noqa: F841
+        n_jobs = (
+            None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+        )
+        sampler_trial_args = product(
+            [n_jobs],
+            avail_samplers.items(),
+            [scorings],
+            [{}],
+            datasets,
+        )
+
+        sampler_trial_args = list(zip(sampler_trial_args, studies))
+
+        pool = ProcessPool(processes=processes)
+        logger.info(f"Running Sampler trials with the following directives: {scorings}")
+        start = time.monotonic()
+        for _ in pool.uimap(run_study_sampler_comb_trial, sampler_trial_args):
             pass
         logger.info(f"Finished Sampler trials in {time.monotonic() - start} seconds")
     else:
