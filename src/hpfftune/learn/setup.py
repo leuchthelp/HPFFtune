@@ -177,76 +177,82 @@ def sampler_test(
     numerical_columns_subset.append(target)
     X = preprocess(dataset, categorical_columns_subset, numerical_columns_subset)
 
-    datasets: list[Data] = [
-        {"train": (X, pd.Series()), "path": "sqlite:///samplers.sqlite3"},
-    ]
-
-    sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
-    avail_samplers = get_metadata(samplers)
-
-    scorings: dict[str, StudyDirection] = {
-        target: StudyDirection.MAXIMIZE,
-    }
-    sampler_trial_args = list(
-        product([sampler], avail_samplers.items(), [scorings], [{}], datasets)
+    X_100_samples = (
+        X.reset_index(drop=True).drop_duplicates().sample(1000).drop(columns=[target])
     )
+    y: pd.Series = X.reset_index(drop=True)[target]
 
-    studies: list[optuna.Study] = []
-    for trial in sampler_trial_args:
-        studies.append(
-            create_study_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
-        )
+    # datasets: list[Data] = [
+    #     {
+    #         "train": (X, pd.Series()),
+    #         "path": "sqlite:///samplers.sqlite3",
+    #     },
+    # ]
 
-    if just_export is False:
-        processes = 4
-        cpu_count = os.cpu_count()  # noqa: F841
-        n_jobs = (
-            None  # if cpu_count is None else (cpu_count - processes - 1) / processes
-        )
-        sampler_trial_args = product(
-            [n_jobs],
-            avail_samplers.items(),
-            [scorings],
-            [{}],
-            datasets,
-        )
+    # sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)
+    # avail_samplers = get_metadata(samplers)
 
-        sampler_trial_args = list(zip(sampler_trial_args, studies))
+    # scorings: dict[str, StudyDirection] = {
+    #     target: StudyDirection.MAXIMIZE,
+    # }
+    # sampler_trial_args = list(
+    #     product([sampler], avail_samplers.items(), [scorings], [{}], datasets)
+    # )
 
-        pool = ProcessPool(processes=processes)
-        logger.info(f"Running Sampler trials with the following directives: {scorings}")
-        start = time.monotonic()
-        for _ in pool.uimap(run_study_sampler_trial, sampler_trial_args):
-            pass
-        logger.info(f"Finished Sampler trials in {time.monotonic() - start} seconds")
-    else:
-        df_studies = [study.trials_dataframe() for study in studies]
-        tmp = pd.concat(df_studies)
+    # studies: list[optuna.Study] = []
+    # for trial in sampler_trial_args:
+    #     studies.append(
+    #         create_study_trial(trial[0], trial[1], trial[2], trial[3], trial[4])
+    #     )
 
-        new_names = list(scorings.keys())
+    # if just_export is False:
+    #     processes = 4
+    #     cpu_count = os.cpu_count()
+    #     n_jobs = (
+    #         None  # if cpu_count is None else (cpu_count - processes - 1) / processes
+    #     )
+    #     sampler_trial_args = product(
+    #         [n_jobs],
+    #         avail_samplers.items(),
+    #         [scorings],
+    #         [{}],
+    #         datasets,
+    #     )
 
-        renameables: dict[str, str] = {}
+    #     sampler_trial_args = list(zip(sampler_trial_args, studies))
 
-        for idx, name in enumerate(new_names):
-            renameables[f"values_{idx}"] = name
+    #     pool = ProcessPool(processes=processes)
+    #     logger.info(f"Running Sampler trials with the following directives: {scorings}")
+    #     start = time.monotonic()
+    #     for _ in pool.uimap(run_study_sampler_trial, sampler_trial_args):
+    #         pass
+    #     logger.info(f"Finished Sampler trials in {time.monotonic() - start} seconds")
+    # else:
+    #     df_studies = [study.trials_dataframe() for study in studies]
+    #     tmp = pd.concat(df_studies)
 
-        tmp = tmp.rename(columns=renameables)
-        tmp.to_json("sample-data/sampler-trials.json", orient="records")
+    #     new_names = list(scorings.keys())
 
+    #     renameables: dict[str, str] = {}
 
-def sampler_comb_test(
-    dataset: pd.DataFrame,
-    target: str,
-    categorical_columns_subset: list[str],
-    numerical_columns_subset: list[str],
-    just_export: bool = False,
-) -> None:
+    #     for idx, name in enumerate(new_names):
+    #         renameables[f"values_{idx}"] = name
 
-    numerical_columns_subset.append(target)
-    X = preprocess(dataset, categorical_columns_subset, numerical_columns_subset)
+    #     tmp = tmp.rename(columns=renameables)
+    #     tmp.to_json("sample-data/sampler-trials.json", orient="records")
+
+    #
+    #
+    # Ugly but should work
+    #
+    #
 
     datasets: list[Data] = [
-        {"train": (X, pd.Series()), "path": "sqlite:///samplers_comb.sqlite3"},
+        {
+            "train": (X.drop(columns=[target]), y),
+            "path": "sqlite:///samplers_comb.sqlite3",
+            "test": (X_100_samples, pd.Series()),
+        },
     ]
 
     sampler = optunahub.load_module("samplers/auto_sampler").AutoSampler(seed=10)

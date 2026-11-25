@@ -270,6 +270,7 @@ class SamplerTrial:
             self.X_test, self.y_test = data["test"]
 
         self.scoring = scoring
+        self.i = 0
 
     def __call__(self, trial: optuna.Trial) -> list[float]:
         sampler_name = trial.suggest_categorical("sampler", list(self.sampler.keys()))
@@ -322,10 +323,12 @@ class SamplerTrial:
             directions=list(
                 self.scoring.values(),
             ),
-            study_name=f"InnerSamplerTrial-{sampler_name}-{list(self.scoring.keys())}",
+            study_name=f"InnerSamplerTrial{self.i}-{sampler_name}-{list(self.scoring.keys())}",
             storage=self.path,
             load_if_exists=True,
         )
+
+        self.i += 1
 
         try:
             study.optimize(
@@ -382,16 +385,12 @@ class SamplerCombTrial:
         scoring: list[str],
         cv: BaseCrossValidator | None = None,
     ):
-        X, _ = data["train"]
+        self.X, self.y = data["train"]
         self.regressors = regressors
 
-        X: pd.DataFrame = X[X["task_type"] == "read"]
-        X.drop_duplicates()
-        self.X_test = X
-
-        X: pd.DataFrame = X.sample(100)
-        self.y: pd.Series = X[*scoring]
-        self.X: pd.DataFrame = X.drop(columns=scoring)
+        self.X_test, self.y_test = None, None
+        if "test" in data:
+            self.X_test, self.y_test = data["test"]
 
         self.scoring = scoring
         self.cv = KFold(n_splits=5, shuffle=True, random_state=1) if cv is None else cv
@@ -428,12 +427,15 @@ class SamplerCombTrial:
 
         X, y = regressor_metadata.clean_data(self.X, self.y)
         pipe = self.gen_pipeline(regressor_init, regressor_name, X)
-
         pipe.fit(X, y)
 
         pred: pd.Series = pd.Series(pipe.predict(self.X_test))
         idx = pred.idxmax()
-        trial.suggest_categorical("config", [str(dict(self.X_test[idx]))])
+
+        if self.X_test is None:
+            raise ValueError
+
+        trial.suggest_categorical("config", [str(dict(self.X_test.iloc[idx]))])
         return [pred.max(), 1]
 
 
