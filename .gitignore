@@ -17,3 +17,5 @@ site
 *.h5
 *.json
 #*.sqlite3
+
+smac3_output

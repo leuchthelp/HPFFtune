@@ -24,6 +24,27 @@ from hpfftune.helpers import Data, MetaData
 logger = logging.getLogger(__name__)
 
 
+def create_study_trial(
+    sampler: Any,
+    regressor_meta: tuple[str, MetaData],
+    scoring: dict[str, StudyDirection],
+    additional: dict[str, StudyDirection],
+    data: Data,
+) -> optuna.Study:
+    name = data["path"].split("/")[-1].split(".")[0]
+
+    study = optuna.create_study(
+        sampler=sampler,
+        directions=list(scoring.values())
+        + list(additional.values())
+        + [StudyDirection.MINIMIZE],
+        storage=data["path"],
+        study_name=f"{name}-{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}-[p_value]",
+        load_if_exists=True,
+    )
+    return study
+
+
 class MetricTrial:
     def __init__(
         self,
@@ -138,27 +159,6 @@ class MetricTrial:
         return res
 
 
-def create_study_metric_trial(
-    sampler: Any,
-    regressor_meta: tuple[str, MetaData],
-    scoring: dict[str, StudyDirection],
-    additional: dict[str, StudyDirection],
-    data: Data,
-) -> optuna.Study:
-    name = data["path"].split("/")[-1].split(".")[0]
-
-    study = optuna.create_study(
-        sampler=sampler,
-        directions=list(scoring.values())
-        + list(additional.values())
-        + [StudyDirection.MINIMIZE],
-        storage=data["path"],
-        study_name=f"{name}-{regressor_meta[0]}-{list(scoring.keys())}-{list(additional.keys())}-[p_value]",
-        load_if_exists=True,
-    )
-    return study
-
-
 def run_study_metric_trial(
     args: tuple[
         tuple[
@@ -188,6 +188,176 @@ def run_study_metric_trial(
                 list(additional.keys()),
             ),
             n_trials=25,
+            n_jobs=n_jobs if n_jobs else 1,
+            show_progress_bar=True,
+        )
+    except ValueError:
+        pass
+
+
+class InnerSampleTrial:
+    def __init__(
+        self,
+        X: pd.DataFrame,
+        scoring: dict[str, StudyDirection],
+    ):
+        self.X = X
+
+        self.scoring = scoring
+
+    def __call__(self, trial: optuna.Trial) -> list[float]:
+        parameters: dict[str, Any] = {
+            "format": trial.suggest_categorical("format", ["zarr", "hdf5", "netcdf4"]),
+            "task_type": trial.suggest_categorical("task_type", ["read"]),
+            "language": trial.suggest_categorical("language", ["py"]),
+            "no_caching": trial.suggest_categorical("no_caching", [False]),
+            "parallel_backend": trial.suggest_categorical(
+                "parallel_backend", ["MPI", None]
+            ),
+            "access_kind": trial.suggest_categorical("access_kind", ["independent"]),
+            "unit_var": trial.suggest_categorical("unit_var", ["GB"]),
+            "unit_chunk": trial.suggest_categorical("unit_chunk", ["MB"]),
+            "dimensions": trial.suggest_int("dimensions", 1, 3, step=1),
+            "num_nodes": trial.suggest_categorical("num_nodes", [1]),
+            "num_ranks": trial.suggest_categorical("num_ranks", [1, 8, 16, 32, 64]),
+            "parallel": trial.suggest_categorical("parallel", [True, False]),
+            "total_filesize": trial.suggest_categorical(
+                "total_filesize", [10, 50, 100]
+            ),
+            "filesize_per_var": trial.suggest_categorical(
+                "filesize_per_var", [10, 50, 100]
+            ),
+            "filesize_per_chunk": trial.suggest_categorical(
+                "filesize_per_chunk", [2, 4, 8, 16, 32, 64, 128]
+            ),
+        }
+
+        values: pd.Series = self.X.loc[
+            self.X[list(parameters.keys())].isin(list(parameters.values())).all(axis=1),
+            :,
+        ]
+        values = values.reset_index(drop=True)
+
+        res: list[float] = []
+        for entry in self.scoring:
+            r = 0
+
+            if not values.empty:
+                r = float(np.array(values[entry]).mean())
+
+            res.append(r)
+        return res
+
+
+class SamplerTrial:
+    def __init__(
+        self,
+        data: Data,
+        sampler: dict[str, MetaData],
+        scoring: dict[str, StudyDirection],
+    ):
+        self.path = data["path"]
+        self.X, self.y = data["train"]
+        self.sampler = sampler
+
+        self.X_test, self.y_test = None, None
+        if "test" in data:
+            self.X_test, self.y_test = data["test"]
+
+        self.scoring = scoring
+
+    def __call__(self, trial: optuna.Trial) -> list[float]:
+        sampler_name = trial.suggest_categorical("sampler", list(self.sampler.keys()))
+
+        sampler_metadata = self.sampler[sampler_name]
+        selected_params = sampler_metadata.param_map(trial)
+
+        parameters: dict[str, Any] = {
+            "format": optuna.distributions.CategoricalDistribution(
+                ["zarr", "hdf5", "netcdf4"]
+            ),
+            "task_type": optuna.distributions.CategoricalDistribution(["read"]),
+            "language": optuna.distributions.CategoricalDistribution(["py"]),
+            "no_caching": optuna.distributions.CategoricalDistribution([False]),
+            "parallel_backend": optuna.distributions.CategoricalDistribution(
+                ["MPI", None]
+            ),
+            "access_kind": optuna.distributions.CategoricalDistribution(
+                ["independent"]
+            ),
+            "unit_var": optuna.distributions.CategoricalDistribution(["GB"]),
+            "unit_chunk": optuna.distributions.CategoricalDistribution(["MB"]),
+            "dimensions": optuna.distributions.IntDistribution(1, 3, step=1),
+            "num_nodes": optuna.distributions.CategoricalDistribution([1]),
+            "num_ranks": optuna.distributions.CategoricalDistribution(
+                [1, 8, 16, 32, 64]
+            ),
+            "parallel": optuna.distributions.CategoricalDistribution([True, False]),
+            "total_filesize": optuna.distributions.CategoricalDistribution(
+                [10, 50, 100]
+            ),
+            "filesize_per_var": optuna.distributions.CategoricalDistribution(
+                [10, 50, 100]
+            ),
+            "filesize_per_chunk": optuna.distributions.CategoricalDistribution(
+                [2, 4, 8, 16, 32, 64, 128]
+            ),
+        }
+
+        if "search_space" in selected_params:
+            selected_params["search_space"] = parameters
+
+        n_trials = 100
+        if "n_trials" in selected_params:
+            selected_params["n_trials"] = n_trials
+
+        sampler_init = sampler_metadata.sampler(selected_params)
+        study = optuna.create_study(
+            sampler=sampler_init,
+            directions=list(
+                self.scoring.values(),
+            ),
+            study_name=f"InnerSamplerTrial-{sampler_name}-{list(self.scoring.keys())}",
+            storage=self.path,
+            load_if_exists=True,
+        )
+
+        study.optimize(
+            InnerSampleTrial(self.X, self.scoring),
+            n_trials=n_trials,
+            show_progress_bar=True,
+        )
+
+        return [study.best_value, 1]
+
+
+def run_study_sampler_trial(
+    args: tuple[
+        tuple[
+            int,
+            tuple[str, MetaData],
+            dict[str, StudyDirection],
+            dict[str, StudyDirection],
+            Data,
+            str,
+        ],
+        optuna.Study,
+    ],
+) -> None:
+    n_jobs: int | None = args[0][0]
+    sampler_meta: tuple[str, MetaData] = args[0][1]
+    scoring: dict[str, StudyDirection] = args[0][2]
+    data: Data = args[0][4]
+    study: optuna.Study = args[1]
+
+    try:
+        study.optimize(
+            SamplerTrial(
+                data,
+                {sampler_meta[0]: sampler_meta[1]},
+                scoring,
+            ),
+            n_trials=5,
             n_jobs=n_jobs if n_jobs else 1,
             show_progress_bar=True,
         )

@@ -6,6 +6,7 @@ from typing import Any, NotRequired, TypedDict, cast
 
 import optuna
 import pandas as pd
+from optuna.samplers import BaseSampler
 from sklearn.base import BaseEstimator
 
 
@@ -19,6 +20,10 @@ class MetaData:
 
     @abstractmethod
     def regressor(self, params: dict[str, Any]) -> BaseEstimator:
+        pass
+
+    @abstractmethod
+    def sampler(self, params: dict[str, Any]) -> BaseSampler:
         pass
 
     @abstractmethod
