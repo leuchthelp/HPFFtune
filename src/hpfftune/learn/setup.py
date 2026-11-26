@@ -178,7 +178,7 @@ def sampler_test(
     X = preprocess(dataset, categorical_columns_subset, numerical_columns_subset)
 
     X_100_samples = (
-        X.reset_index(drop=True).drop_duplicates().sample(1000).drop(columns=[target])
+        X.reset_index(drop=True).drop_duplicates().drop(columns=[target])
     )
     y: pd.Series = X.reset_index(drop=True)[target]
 

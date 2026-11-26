@@ -211,7 +211,7 @@ class InnerSampleTrial:
             "format": trial.suggest_categorical("format", ["zarr", "hdf5", "netcdf4"]),
             "task_type": trial.suggest_categorical("task_type", ["read"]),
             "language": trial.suggest_categorical("language", ["py"]),
-            "no_caching": trial.suggest_categorical("no_caching", [False]),
+            "no_caching": trial.suggest_categorical("no_caching", [True]),
             "parallel_backend": trial.suggest_categorical(
                 "parallel_backend", ["MPI", None]
             ),
@@ -233,24 +233,19 @@ class InnerSampleTrial:
             ),
         }
 
-        query_string = "".join(
-            f'({key} == "{val}") and ' for key, val in parameters.items()
-        )
-
-        query_string = query_string.rstrip("and ")
-
-        values: pd.DataFrame = self.X.astype(str).query(query_string)
-        values = values.reset_index(drop=True)
+        values = self.X.reset_index(drop=True)
+        for key, value in parameters.items():
+            values: pd.DataFrame = values.loc[(values[key] == value)]
 
         res: list[float] = []
         for entry in self.scoring:
-            r: float | None = 0
+            r: float = 0
 
             df: pd.Series = values[entry]
             if not df.empty:
                 r = float(df.mean())
 
-            res.append(r if r is not None else 0)
+            res.append(r)
         return res
 
 
@@ -284,7 +279,7 @@ class SamplerTrial:
             ),
             "task_type": optuna.distributions.CategoricalDistribution(["read"]),
             "language": optuna.distributions.CategoricalDistribution(["py"]),
-            "no_caching": optuna.distributions.CategoricalDistribution([False]),
+            "no_caching": optuna.distributions.CategoricalDistribution([True]),
             "parallel_backend": optuna.distributions.CategoricalDistribution(
                 ["MPI", None]
             ),
@@ -435,7 +430,8 @@ class SamplerCombTrial:
         if self.X_test is None:
             raise ValueError
 
-        trial.suggest_categorical("config", [str(dict(self.X_test.iloc[idx]))])
+        print(f"config: {dict(self.X_test.iloc[idx])!s}")
+        # trial.suggest_categorical("config", [str(dict(self.X_test.iloc[idx]))])
         return [pred.max(), 1]
 
 
